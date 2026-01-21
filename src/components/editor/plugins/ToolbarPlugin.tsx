@@ -1,3 +1,4 @@
+import { $isLinkNode, TOGGLE_LINK_COMMAND } from "@lexical/link";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { mergeRegister } from "@lexical/utils";
 import {
@@ -20,14 +21,32 @@ import {
   AlignRightIcon,
   BoldIcon,
   ItalicIcon,
+  LinkIcon,
   RedoIcon,
   StrikethroughIcon,
   UnderlinedIcon,
   UndoIcon,
 } from "../../../assets/icon";
+import { Modal } from "../../Modal";
 
 function Divider() {
   return <div className="divider" />;
+}
+
+function getSelectedNode(selection: any) {
+  const anchor = selection.anchor;
+  const focus = selection.focus;
+  const anchorNode = selection.anchor.getNode();
+  const focusNode = selection.focus.getNode();
+  if (anchorNode === focusNode) {
+    return anchorNode;
+  }
+  const isBackward = selection.isBackward();
+  if (isBackward) {
+    return focus.isAtStart() ? anchorNode : focusNode;
+  } else {
+    return anchor.isAtStart() ? focusNode : anchorNode;
+  }
 }
 
 export default function ToolbarPlugin() {
@@ -40,30 +59,47 @@ export default function ToolbarPlugin() {
   const [isUnderline, setIsUnderline] = useState(false);
   const [isStrikethrough, setIsStrikethrough] = useState(false);
 
+  // State mới cho chức năng link
+  const [isLink, setIsLink] = useState(false);
+  const [isLinkModalOpen, setIsLinkModalOpen] = useState(false);
+  const [linkUrl, setLinkUrl] = useState("");
+  const [linkText, setLinkText] = useState("");
+
   const $updateToolbar = useCallback(() => {
     const selection = $getSelection();
     if ($isRangeSelection(selection)) {
-      // Update text format
+      // Cập nhật định dạng text (bold, italic, ...)
       setIsBold(selection.hasFormat("bold"));
       setIsItalic(selection.hasFormat("italic"));
       setIsUnderline(selection.hasFormat("underline"));
       setIsStrikethrough(selection.hasFormat("strikethrough"));
+
+      // --- Logic xử lý cho link ---
+      const node = getSelectedNode(selection);
+      const parent = node.getParent();
+
+      // Kiểm tra xem node hoặc cha của nó có phải là LinkNode không
+      if ($isLinkNode(parent) || $isLinkNode(node)) {
+        setIsLink(true);
+        const linkNode = $isLinkNode(parent) ? parent : node;
+        setLinkUrl(linkNode.getURL()); // Lấy URL của link hiện tại
+      } else {
+        setIsLink(false);
+        setLinkUrl(""); // Reset URL nếu không phải là link
+      }
     }
   }, []);
 
   useEffect(() => {
     return mergeRegister(
       editor.registerUpdateListener(({ editorState }) => {
-        editorState.read(
-          () => {
-            $updateToolbar();
-          },
-          { editor },
-        );
+        editorState.read(() => {
+          $updateToolbar();
+        });
       }),
       editor.registerCommand(
         SELECTION_CHANGE_COMMAND,
-        (_payload, _newEditor) => {
+        () => {
           $updateToolbar();
           return false;
         },
@@ -87,6 +123,56 @@ export default function ToolbarPlugin() {
       ),
     );
   }, [editor, $updateToolbar]);
+
+  // Hàm được gọi khi nhấn nút "Link" trên toolbar
+  const handleAddLink = useCallback(() => {
+    if (!isLink) {
+      // Nếu đang tạo link mới
+      editor.update(() => {
+        const selection = $getSelection();
+        if ($isRangeSelection(selection)) {
+          // Lấy text đang được bôi đen làm text mặc định cho link
+          setLinkText(selection.getTextContent());
+        }
+      });
+    } else {
+      // Nếu đang sửa link cũ, text sẽ được lấy từ node
+      editor.update(() => {
+        const selection = $getSelection();
+        if ($isRangeSelection(selection)) {
+          const node = getSelectedNode(selection);
+          const parent = node.getParent();
+          const linkNode = $isLinkNode(parent) ? parent : node;
+          if (linkNode) {
+            setLinkText(linkNode.getTextContent());
+          }
+        }
+      });
+    }
+    setIsLinkModalOpen(true);
+  }, [editor, isLink]);
+
+  // Hàm được gọi khi submit form trong modal
+  const handleLinkSubmit = useCallback(() => {
+    if (linkUrl.trim() === "") {
+      // Nếu URL trống, coi như là gỡ bỏ link
+      editor.dispatchCommand(TOGGLE_LINK_COMMAND, null);
+    } else {
+      // Sử dụng TOGGLE_LINK_COMMAND để thêm hoặc cập nhật link
+      editor.dispatchCommand(TOGGLE_LINK_COMMAND, linkUrl);
+    }
+
+    // Đóng modal và reset state
+    setIsLinkModalOpen(false);
+    setLinkUrl("");
+    setLinkText("");
+  }, [editor, linkUrl]);
+
+  const handleCloseModal = () => {
+    setIsLinkModalOpen(false);
+    setLinkUrl("");
+    setLinkText("");
+  };
 
   return (
     <div className="toolbar" ref={toolbarRef}>
@@ -183,7 +269,111 @@ export default function ToolbarPlugin() {
         aria-label="Justify Align"
       >
         <AlignJustifyIcon />
-      </button>{" "}
+      </button>
+      <Divider />
+      <button
+        onClick={handleAddLink}
+        className="toolbar-item spaced"
+        aria-label="Add Link"
+      >
+        <LinkIcon />
+      </button>
+      <Modal
+        isOpen={isLinkModalOpen}
+        onClose={() => {
+          setIsLinkModalOpen(false);
+          setLinkUrl("");
+          setLinkText("");
+        }}
+        title="Add Link"
+        footer={
+          <div
+            style={{ display: "flex", gap: "10px", justifyContent: "flex-end" }}
+          >
+            <button
+              onClick={() => {
+                setIsLinkModalOpen(false);
+                setLinkUrl("");
+                setLinkText("");
+              }}
+              style={{
+                padding: "8px 16px",
+                backgroundColor: "#f0f0f0",
+                border: "1px solid #ccc",
+                borderRadius: "4px",
+                cursor: "pointer",
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleLinkSubmit}
+              style={{
+                padding: "8px 16px",
+                backgroundColor: "#007bff",
+                color: "white",
+                border: "none",
+                borderRadius: "4px",
+                cursor: "pointer",
+              }}
+            >
+              Add Link
+            </button>
+          </div>
+        }
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+          <div>
+            <label
+              style={{
+                display: "block",
+                marginBottom: "4px",
+                fontWeight: "500",
+              }}
+            >
+              Text:
+            </label>
+            <input
+              type="text"
+              value={linkText}
+              onChange={(e) => setLinkText(e.target.value)}
+              placeholder="Link text"
+              style={{
+                width: "100%",
+                padding: "8px",
+                border: "1px solid #ccc",
+                borderRadius: "4px",
+                boxSizing: "border-box",
+              }}
+            />
+          </div>
+          <div>
+            <label
+              style={{
+                display: "block",
+                marginBottom: "4px",
+                fontWeight: "500",
+              }}
+            >
+              URL:
+            </label>
+            <input
+              type="url"
+              value={linkUrl}
+              onChange={(e) => setLinkUrl(e.target.value)}
+              placeholder="https://example.com"
+              autoFocus
+              style={{
+                width: "100%",
+                padding: "8px",
+                border: "1px solid #ccc",
+                borderRadius: "4px",
+                boxSizing: "border-box",
+              }}
+            />
+          </div>
+        </div>
+      </Modal>{" "}
     </div>
   );
 }
